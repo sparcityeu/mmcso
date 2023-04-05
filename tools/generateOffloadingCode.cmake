@@ -67,7 +67,7 @@ foreach(MPI_SIG IN LISTS MPI_NONBLOCK)
        "${MPI_SIG}" MATCHES "MPI_Init" OR
        "${MPI_SIG}" MATCHES "MPI_Is_" OR
        "${MPI_SIG}" MATCHES "MPI_Intercom" OR
-       "${MPI_SIG}" MATCHES "MPI_Im?probe_")
+       "${MPI_SIG}" MATCHES "MPI_Im?probe")
         continue()
     endif()
     get_function_bodies("${MPI_SIG}" NONBLOCKING_DEFINTION BLOCKING_DEFINTION)
