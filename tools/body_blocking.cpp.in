@@ -1,0 +1,7 @@
+int @FUNCTION_NAME_BLOCKING@(@FUNCTION_PARAMETER_W_TYPES_WO_REQ@)
+{
+    MPI_Request request;
+    @FUNCTION_NAME@(@FUNCTION_PARAMETER_WO_REQ@, &request);
+    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    return MPI_SUCCESS;
+}

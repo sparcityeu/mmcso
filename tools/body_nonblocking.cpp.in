@@ -1,0 +1,9 @@
+@FUNCTION_SIGNATURE@
+{
+    oe.post(new OffloadCommand{[=](MPI_Request *request_) {
+                                   return P@FUNCTION_NAME@(
+                                       @FUNCTION_PARAMETER_WO_REQ@, request_);
+                               },
+                               @FUNCTION_PARAMETER_REQ@});
+    return MPI_SUCCESS;
+}
