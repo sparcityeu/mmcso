@@ -18,6 +18,26 @@ struct alignas(CLSIZE) measurement {
     double comm_time = 0.0;
 };
 
+#define ARRAY_SIZE 1000000000
+
+thread_local char *a{nullptr};
+thread_local char *b{nullptr};
+
+#define USE_MEMORY_INTENSIVE_WORK 0
+#if USE_MEMORY_INTENSIVE_WORK
+static void do_work(int work)
+{
+    work = 10 * work;
+
+    static int i = 0;
+
+    if (i + work > ARRAY_SIZE) {
+        i = 0;
+    }
+    memcpy(a + i, b + i, work);
+    i += work;
+}
+#else
 static void do_work(int work)
 {
     struct timespec ts {
@@ -25,6 +45,7 @@ static void do_work(int work)
     };
     nanosleep(&ts, NULL);
 }
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -98,8 +119,26 @@ int main(int argc, char *argv[])
     {
         int thread_id = omp_get_thread_num();
 
-        int *sendbuf = (int *)aligned_alloc(PAGESIZE, msg_size * sizeof(int));
-        int *recvbuf = (int *)aligned_alloc(PAGESIZE, msg_size * sizeof(int));
+        // int *sendbuf = (int *)aligned_alloc(PAGESIZE, msg_size * sizeof(int));
+        // int *recvbuf = (int *)aligned_alloc(PAGESIZE, msg_size * sizeof(int));
+
+        size_t num_pages = ((msg_size * sizeof(int) + PAGESIZE - 1) / PAGESIZE) * PAGESIZE;
+        assert(num_pages % PAGESIZE == 0);
+        int *sendbuf = (int *)aligned_alloc(PAGESIZE, num_pages);
+        int *recvbuf = (int *)aligned_alloc(PAGESIZE, num_pages);
+        if (!sendbuf || !recvbuf) {
+            perror("aligned_alloc");
+            exit(EXIT_FAILURE);
+        }
+
+        num_pages = ((ARRAY_SIZE + PAGESIZE - 1) / PAGESIZE) * PAGESIZE;
+        assert(num_pages % PAGESIZE == 0);
+        a = (char *)aligned_alloc(PAGESIZE, num_pages);
+        b = (char *)aligned_alloc(PAGESIZE, num_pages);
+        if (!a || !b) {
+            perror("aligned_alloc");
+            exit(EXIT_FAILURE);
+        }
 
         for (int i = 0; i < msg_size; ++i) {
             sendbuf[i] = thread_id + i;
@@ -142,6 +181,13 @@ int main(int argc, char *argv[])
             m[thread_id].comm_time += time_end - total_time;
 
 #if !defined(NDEBUG)
+            assert(status_s.MPI_SOURCE == rank);
+            assert(status_s.MPI_TAG == thread_id);
+            int count;
+            MPI_Get_count(&status_r, MPI_INT, &count);
+            assert(status_r.MPI_SOURCE == rank_recv);
+            assert(status_r.MPI_TAG == thread_id);
+            assert(count == msg_size);
             for (int i = 0; i < msg_size; ++i) {
                 assert(recvbuf[i] == thread_id + i);
                 recvbuf[i] = -1;
@@ -150,7 +196,10 @@ int main(int argc, char *argv[])
         }
         free(sendbuf);
         free(recvbuf);
-    }
+
+        free(a);
+        free(b);
+    } // parallel region end
 
     // MPI_Barrier(MPI_COMM_WORLD);
 
