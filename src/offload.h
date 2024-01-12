@@ -12,12 +12,16 @@ namespace mmcso
 {
     struct OffloadCommand {
         using MPICommand = std::function<int(MPI_Request *)>;
-        explicit OffloadCommand(MPICommand &&func, MPI_Request *request) : func_{func}, request_{request} {}
+        explicit OffloadCommand(MPICommand &&func, MPI_Request *request, bool null_request = false)
+            : func_{func}, request_{request}, null_request_{null_request}
+        {
+        }
 
         int operator()(MPI_Request *request) const { return func_(request); }
 
         MPICommand   func_;
         MPI_Request *request_;
+        bool         null_request_;
     };
 
     template <class CommandQueue, class RequestManager, size_t NumThreads>
@@ -35,6 +39,13 @@ namespace mmcso
                     MPI_Request *request = rm_.post(command->request_);
 
                     int ret = (*command)(request);
+                    if (command->null_request_) {
+                        // set request to MPI_REQUEST_NULL
+                        // this will set the flag to true after the
+                        // request was tested
+                        // required for (blocking) MPI calls w/o request
+                        *request = MPI_REQUEST_NULL;
+                    }
 
                     delete command;
 
@@ -54,7 +65,7 @@ namespace mmcso
                 provided_promise.set_value(provided);
             }
             int rank;
-            MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
             util::set_offload_thread_affinity(thread_.native_handle(), rank);
             poll_and_test();
