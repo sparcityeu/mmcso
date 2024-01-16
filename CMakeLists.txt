@@ -12,6 +12,13 @@ set(CMAKE_DISABLE_SOURCE_CHANGES ON)
 set(CMAKE_DISABLE_IN_SOURCE_BUILD ON)
 set(CMAKE_CXX_STANDARD 17)
 
+set(CMAKE_CXX_CLANG_TIDY
+  clang-tidy;
+  -extra-arg=-std=c++17;
+  -format-style='file';
+  -header-filter=${CMAKE_CURRENT_SOURCE_DIR};
+)
+
 # add_compile_options(-march=native)
 string(APPEND CMAKE_CXX_FLAGS_RELEASE " -march=native -mtune=native ")
 

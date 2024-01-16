@@ -71,8 +71,8 @@ int main(int argc, char *argv[])
     MPI_Info_set(info, "mpi_assert_no_any_source", "true");
     MPI_Info_set(info, "mpi_assert_exact_length", "true");
     MPI_Info_set(info, "mpi_assert_allow_overtaking", "true");
-
     MPI_Comm_set_info(MPI_COMM_WORLD, info);
+    MPI_Info_free(&info);
 
     measurement m[nthreads];
     MPI_Comm    communicators[nthreads];

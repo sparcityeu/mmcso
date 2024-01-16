@@ -11,7 +11,13 @@
 
 #include "offload.h"
 
-static auto &oe = mmcso::OffloadEngine<mmcso::AtomicQueue<1024>, mmcso::ArrayRequestManager<256>>::instance();
+#define QUEUE_SIZE   1024
+// #define REQUEST_SIZE 131072
+#define REQUEST_SIZE 1024
+
+using OE = mmcso::OffloadEngine<mmcso::AtomicQueue<QUEUE_SIZE>, mmcso::ArrayRequestManager<REQUEST_SIZE>>;
+// using OE = mmcso::OffloadEngine<mmcso::LockedQueue, mmcso::ArrayRequestManager<REQUEST_SIZE>>;
+static OE &oe = OE::instance();
 
 extern "C" {
 
@@ -52,39 +58,14 @@ int MPI_Finalize()
     return MPI_SUCCESS;
 }
 
-int MPI_Irecv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Request *request)
-{
-    oe.post(new mmcso::OffloadCommand{std::function{[=](MPI_Request *request_) {
-                                          return PMPI_Irecv(buf, count, datatype, source, tag, comm, request_);
-                                      }},
-                                      request});
-    return MPI_SUCCESS;
-}
-
-int MPI_Isend(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm, MPI_Request *request)
-{
-    oe.post(new mmcso::OffloadCommand{std::function{[=](MPI_Request *request_) {
-                                          return PMPI_Isend(buf, count, datatype, dest, tag, comm, request_);
-                                      }},
-                                      request});
-    return MPI_SUCCESS;
-}
-
-int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm)
-{
-    MPI_Request request;
-    MPI_Isend(buf, count, datatype, dest, tag, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
-    return MPI_SUCCESS;
-}
-
-int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status)
-{
-    MPI_Request request;
-    MPI_Irecv(buf, count, datatype, source, tag, comm, &request);
-    MPI_Wait(&request, status);
-    return MPI_SUCCESS;
-}
+#if MMCSO_OFFLOAD_NOT_IMPLEMENTED_YET
+int MPI_Waitany(int count, MPI_Request array_of_requests[], int *index, MPI_Status *status);
+int MPI_Waitsome(int         incount,
+                 MPI_Request array_of_requests[],
+                 int        *outcount,
+                 int         array_of_indices[],
+                 MPI_Status  array_of_statuses[]);
+#endif
 
 int MPI_Wait(MPI_Request *request, MPI_Status *status)
 {
@@ -123,6 +104,52 @@ int MPI_Test(MPI_Request *request, int *flag, MPI_Status *status)
     return MPI_SUCCESS;
 }
 
+
+#if MMCSO_OFFLOAD_NOT_IMPLEMENTED_YET
+int      MPI_Testall(int count, MPI_Request array_of_requests[], int *flag, MPI_Status array_of_statuses[]);
+int      MPI_Testany(int count, MPI_Request array_of_requests[], int *index, int *flag, MPI_Status *status);
+int      MPI_Test_cancelled(const MPI_Status *status, int *flag);
+int      MPI_Testsome(int         incount,
+                      MPI_Request array_of_requests[],
+                      int        *outcount,
+                      int         array_of_indices[],
+                      MPI_Status  array_of_statuses[]);
+#endif
+
+int MPI_Irecv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Request *request)
+{
+    oe.post(new mmcso::OffloadCommand{std::function{[=](MPI_Request *request_) {
+                                          return PMPI_Irecv(buf, count, datatype, source, tag, comm, request_);
+                                      }},
+                                      request});
+    return MPI_SUCCESS;
+}
+
+int MPI_Isend(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm, MPI_Request *request)
+{
+    oe.post(new mmcso::OffloadCommand{std::function{[=](MPI_Request *request_) {
+                                          return PMPI_Isend(buf, count, datatype, dest, tag, comm, request_);
+                                      }},
+                                      request});
+    return MPI_SUCCESS;
+}
+
+int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm)
+{
+    MPI_Request request;
+    MPI_Isend(buf, count, datatype, dest, tag, comm, &request);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
+    return MPI_SUCCESS;
+}
+
+int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status)
+{
+    MPI_Request request;
+    MPI_Irecv(buf, count, datatype, source, tag, comm, &request);
+    MPI_Wait(&request, status);
+    return MPI_SUCCESS;
+}
+
 int MPI_Ibarrier(MPI_Comm comm, MPI_Request *request)
 {
     oe.post(new mmcso::OffloadCommand{
@@ -134,7 +161,7 @@ int MPI_Barrier(MPI_Comm comm)
 {
     MPI_Request request;
     MPI_Ibarrier(comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -151,7 +178,7 @@ int MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm
 {
     MPI_Request request;
     MPI_Ibcast(buffer, count, datatype, root, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -176,7 +203,7 @@ int MPI_Reduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datat
 {
     MPI_Request request;
     MPI_Ireduce(sendbuf, recvbuf, count, datatype, op, root, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -207,7 +234,7 @@ int MPI_Allgather(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Iallgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -230,93 +257,42 @@ int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype da
 {
     MPI_Request request;
     MPI_Iallreduce(sendbuf, recvbuf, count, datatype, op, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
-#if 1
+// TODO: is offloading of these functions really required?
+#if OFFLOAD_MPI_COMM_RANK_SIZE
 int MPI_Comm_rank(MPI_Comm comm, int *rank)
 {
     MPI_Request request; // = MPI_REQUEST_NULL;
-    // assert(request == MPI_REQUEST_NULL);
     oe.post(new mmcso::OffloadCommand{std::function{[=](MPI_Request *request_) {
                                           (void)request_;
-                                          printf("calling %s\n", "MPI_Comm_rank");
                                           return PMPI_Comm_rank(comm, rank);
                                       }},
                                       &request,
                                       true});
-    printf("%s wait begin\n", __func__);
-    // oe.wait_blocking(&request);
-    // oe.wait(&request, MPI_STATUS_IGNORE);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
-    printf("%s wait end\n", __func__);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
 int MPI_Comm_size(MPI_Comm comm, int *size)
 {
     MPI_Request request; // = MPI_REQUEST_NULL;
-    // assert(request == MPI_REQUEST_NULL);
     oe.post(new mmcso::OffloadCommand{std::function{[=](MPI_Request *request_) {
                                           (void)request_;
-                                          printf("calling %s\n", "MPI_Comm_size");
                                           return PMPI_Comm_size(comm, size);
                                       }},
                                       &request,
                                       true});
-    printf("%s wait begin\n", __func__);
-    // oe.wait_blocking(&request);
-    // oe.wait(&request, MPI_STATUS_IGNORE);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
-    printf("%s wait end\n", __func__);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 #endif
 
 #if REQUIRED
 int MPI_Query_thread(int *provided);
-int MPI_Comm_rank(MPI_Comm comm, int *rank);
-int MPI_Comm_size(MPI_Comm comm, int *size);
 int MPI_Comm_split(MPI_Comm comm, int color, int key, MPI_Comm *newcomm);
-#endif
-
-#if 0
-
-// MPI_Win_flush_all
-int MPI_Blocking_call_wo_nonblocking_counterpart_and_wo_status(void *buf)
-{
-    MPI_Request request;
-    oe.post(new mmcso::OffloadCommand{std::function{[=](MPI_Request *request_) {
-                                          return MPI_Blocking_call_wo_nonblocking_counterpart_and_wo_status(buf);
-                                      }},
-                                      request});
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
-    return MPI_SUCCESS;
-}
-
-
-// MPI_Iprobe
-int MPI_Nonblocking_wo_request_and_w_status(void *buf, MPI_Status *status)
-{
-    MPI_Request request;
-    oe.post(new mmcso::OffloadCommand{std::function{[=](MPI_Request *request_) {
-                                          return MPI_Nonblocking_wo_request_and_w_status(buf, status);
-                                      }},
-                                      request});
-    MPI_Wait(&request, status);
-    return MPI_SUCCESS;
-}
-
-// MPI_File_read_all, MPI_Recv, blocking call has status instead of request
-int MPI_File_read_all(void *buf, MPI_Status *status)
-{
-    MPI_Request request;
-    MPI_File_iread_all(..., &request);
-    MPI_Wait(&request, status);
-    return MPI_SUCCESS;
-}
-
 #endif
 
 #if 1
@@ -327,7 +303,7 @@ int MPI_Win_create(void *base, MPI_Aint size, int disp_unit, MPI_Info info, MPI_
         std::function{[=](MPI_Request *request_) { return PMPI_Win_create(base, size, disp_unit, info, comm, win); }},
         &request,
         true});
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -336,7 +312,7 @@ int MPI_Win_fence(int assert, MPI_Win win)
     MPI_Request request; // = MPI_REQUEST_NULL;
     oe.post(new mmcso::OffloadCommand{
         std::function{[=](MPI_Request *request_) { return PMPI_Win_fence(assert, win); }}, &request, true});
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -364,7 +340,7 @@ int MPI_Accumulate(const void  *origin_addr,
                                       }},
                                       &request,
                                       true});
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 #endif
@@ -1075,15 +1051,7 @@ int      MPI_Status_f2c(const MPI_Fint *f_status, MPI_Status *c_status);
 int      MPI_Status_set_cancelled(MPI_Status *status, int flag);
 int      MPI_Status_set_elements(MPI_Status *status, MPI_Datatype datatype, int count);
 int      MPI_Status_set_elements_x(MPI_Status *status, MPI_Datatype datatype, MPI_Count count);
-int      MPI_Testall(int count, MPI_Request array_of_requests[], int *flag, MPI_Status array_of_statuses[]);
-int      MPI_Testany(int count, MPI_Request array_of_requests[], int *index, int *flag, MPI_Status *status);
-int      MPI_Test(MPI_Request *request, int *flag, MPI_Status *status);
-int      MPI_Test_cancelled(const MPI_Status *status, int *flag);
-int      MPI_Testsome(int         incount,
-                      MPI_Request array_of_requests[],
-                      int        *outcount,
-                      int         array_of_indices[],
-                      MPI_Status  array_of_statuses[]);
+
 int      MPI_Topo_test(MPI_Comm comm, int *status);
 MPI_Fint MPI_Type_c2f(MPI_Datatype datatype);
 int      MPI_Type_commit(MPI_Datatype *type);
@@ -1168,14 +1136,7 @@ int MPI_Unpack_external(const char   datarep[],
                         void        *outbuf,
                         int          outcount,
                                         MPI_Datatype datatype);
-int MPI_Waitall(int count, MPI_Request array_of_requests[], MPI_Status *array_of_statuses);
-int MPI_Waitany(int count, MPI_Request array_of_requests[], int *index, MPI_Status *status);
-int MPI_Wait(MPI_Request *request, MPI_Status *status);
-int MPI_Waitsome(int         incount,
-                 MPI_Request array_of_requests[],
-                 int        *outcount,
-                 int         array_of_indices[],
-                 MPI_Status  array_of_statuses[]);
+
 int MPI_Win_allocate(MPI_Aint size, int disp_unit, MPI_Info info, MPI_Comm comm, void *baseptr, MPI_Win *win);
 int MPI_Win_allocate_shared(MPI_Aint size, int disp_unit, MPI_Info info, MPI_Comm comm, void *baseptr, MPI_Win *win);
 int MPI_Win_attach(MPI_Win win, void *base, MPI_Aint size);
@@ -1243,7 +1204,7 @@ int MPI_Allgather(const void *sendbuf,  int sendcount,  MPI_Datatype sendtype,
 {
     MPI_Request request;
     MPI_Iallgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1279,7 +1240,7 @@ int MPI_Allgatherv(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Iallgatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1310,7 +1271,7 @@ int MPI_Alltoall(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Ialltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1346,7 +1307,7 @@ int MPI_Alltoallv(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Ialltoallv(sendbuf, sendcounts, sdispls, sendtype, recvbuf, recvcounts, rdispls, recvtype, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1382,7 +1343,7 @@ int MPI_Alltoallw(const void        *sendbuf,
 {
     MPI_Request request;
     MPI_Ialltoallw(sendbuf, sendcounts, sdispls, sendtypes, recvbuf, recvcounts, rdispls, recvtypes, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1401,7 +1362,7 @@ int MPI_Barrier(MPI_Comm comm)
 {
     MPI_Request request;
     MPI_Ibarrier(comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 #endif
@@ -1424,7 +1385,7 @@ int MPI_Bcast(void *buffer,  int count,  MPI_Datatype datatype,
 {
     MPI_Request request;
     MPI_Ibcast(buffer, count, datatype, root, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 #endif
@@ -1448,7 +1409,7 @@ int MPI_Exscan(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datat
 {
     MPI_Request request;
     MPI_Iexscan(sendbuf, recvbuf, count, datatype, op, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1481,7 +1442,7 @@ int MPI_Gather(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Igather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1517,7 +1478,7 @@ int MPI_Gatherv(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Igatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, root, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1535,7 +1496,7 @@ int MPI_Bsend(const void *buf, int count, MPI_Datatype datatype, int dest, int t
 {
     MPI_Request request;
     MPI_Ibsend(buf, count, datatype, dest, tag, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1553,7 +1514,7 @@ int MPI_Mrecv(void *buf,  int count,  MPI_Datatype type,
 {
     MPI_Request request;
     MPI_Imrecv(buf, count, type, message, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 #endif
@@ -1572,7 +1533,7 @@ int MPI_Rsend(const void *buf, int count, MPI_Datatype datatype, int dest, int t
 {
     MPI_Request request;
     MPI_Irsend(buf, count, datatype, dest, tag, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1590,7 +1551,7 @@ int MPI_Ssend(const void *buf, int count, MPI_Datatype datatype, int dest, int t
 {
     MPI_Request request;
     MPI_Issend(buf, count, datatype, dest, tag, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1621,7 +1582,7 @@ int MPI_Neighbor_allgather(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Ineighbor_allgather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1655,7 +1616,7 @@ int MPI_Neighbor_allgatherv(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Ineighbor_allgatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1686,7 +1647,7 @@ int MPI_Neighbor_alltoall(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Ineighbor_alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1723,7 +1684,7 @@ int MPI_Neighbor_alltoallv(const void  *sendbuf,
     MPI_Request request;
     MPI_Ineighbor_alltoallv(
         sendbuf, sendcounts, sdispls, sendtype, recvbuf, recvcounts, rdispls, recvtype, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1760,7 +1721,7 @@ int MPI_Neighbor_alltoallw(const void        *sendbuf,
     MPI_Request request;
     MPI_Ineighbor_alltoallw(
         sendbuf, sendcounts, sdispls, sendtypes, recvbuf, recvcounts, rdispls, recvtypes, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1781,7 +1742,7 @@ int MPI_Reduce(const void *sendbuf,  void *recvbuf,  int count,
 {
     MPI_Request request;
     MPI_Ireduce(sendbuf, recvbuf, count, datatype, op, root, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 #endif
@@ -1807,7 +1768,7 @@ int MPI_Reduce_scatter(
 {
     MPI_Request request;
     MPI_Ireduce_scatter(sendbuf, recvbuf, recvcounts, datatype, op, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1832,7 +1793,7 @@ int MPI_Reduce_scatter_block(
 {
     MPI_Request request;
     MPI_Ireduce_scatter_block(sendbuf, recvbuf, recvcount, datatype, op, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1855,7 +1816,7 @@ int MPI_Scan(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
 {
     MPI_Request request;
     MPI_Iscan(sendbuf, recvbuf, count, datatype, op, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1888,7 +1849,7 @@ int MPI_Scatter(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Iscatter(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1924,7 +1885,7 @@ int MPI_Scatterv(const void  *sendbuf,
 {
     MPI_Request request;
     MPI_Iscatterv(sendbuf, sendcounts, displs, sendtype, recvbuf, recvcount, recvtype, root, comm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1939,7 +1900,7 @@ int MPI_Comm_dup(MPI_Comm comm, MPI_Comm *newcomm)
 {
     MPI_Request request;
     MPI_Comm_idup(comm, newcomm, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1960,7 +1921,7 @@ int MPI_File_read_at(MPI_File fh,  MPI_Offset offset,  void *buf,
 {
     MPI_Request request;
     MPI_File_iread_at(fh, offset, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -1981,7 +1942,7 @@ int MPI_File_write_at(MPI_File fh,  MPI_Offset offset,  const void *buf,
 {
     MPI_Request request;
     MPI_File_iwrite_at(fh, offset, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -2002,7 +1963,7 @@ int MPI_File_read_at_all(MPI_File fh,  MPI_Offset offset,  void *buf,
 {
     MPI_Request request;
     MPI_File_iread_at_all(fh, offset, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -2023,7 +1984,7 @@ int MPI_File_write_at_all(MPI_File fh,  MPI_Offset offset,  const void *buf,
 {
     MPI_Request request;
     MPI_File_iwrite_at_all(fh, offset, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -2044,7 +2005,7 @@ int MPI_File_read(MPI_File fh,  void *buf,  int count,
 {
     MPI_Request request;
     MPI_File_iread(fh, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -2065,7 +2026,7 @@ int MPI_File_write(MPI_File fh,  const void *buf,  int count,
 {
     MPI_Request request;
     MPI_File_iwrite(fh, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -2085,7 +2046,7 @@ int MPI_File_read_all(MPI_File fh,  void *buf,  int count,
 {
     MPI_Request request;
     MPI_File_iread_all(fh, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -2106,7 +2067,7 @@ int MPI_File_write_all(MPI_File fh,  const void *buf,  int count,
 {
     MPI_Request request;
     MPI_File_iwrite_all(fh, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -2127,7 +2088,7 @@ int MPI_File_read_shared(MPI_File fh,  void *buf,  int count,
 {
     MPI_Request request;
     MPI_File_iread_shared(fh, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 
@@ -2148,7 +2109,7 @@ int MPI_File_write_shared(MPI_File fh,  const void *buf,  int count,
 {
     MPI_Request request;
     MPI_File_iwrite_shared(fh, buf, count, datatype, &request);
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    MPI_Wait(&request, MPI_STATUS_IGNORE); // NOLINT: suppress warning 'no matching nonblocking call'
     return MPI_SUCCESS;
 }
 #endif
