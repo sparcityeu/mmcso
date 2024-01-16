@@ -6,8 +6,16 @@
 #include <atomic>
 #include <cassert>
 #include <limits>
+#include <list>
 
 #include <mpi.h>
+
+#if NDEBUG
+#    define DEBUG(fmt, ...)
+#else
+#    include <unistd.h>
+#    define DEBUG(fmt, ...) fprintf(stderr, fmt, __VA_ARGS__);
+#endif /* NDEBUG */
 
 namespace mmcso
 {
@@ -15,8 +23,8 @@ namespace mmcso
     class ArrayRequestManager
     {
         using index_t = uint32_t;
-        static_assert(std::atomic<bool>::is_always_lock_free);
-        static_assert(PoolSize > 0);
+        // static_assert(std::atomic<bool>::is_always_lock_free);
+
         // required for using the MPI_Request as index:
         static_assert(sizeof(MPI_Request) >= sizeof(index_t));
         // required for reinterpret cast:
@@ -25,35 +33,44 @@ namespace mmcso
     public:
         void test_request(MPI_Request *request) { rc_.test_request(request); }
 
-        void test_requests()
-        {
-            rc_.test_requests();
-            rc_.reclaim();
-        }
+        void test_requests() { rc_.test_requests(); }
 
         MPI_Request *post(MPI_Request *request)
         {
-            index_t idx = rc_.next_slot_idx();
+            // if(!request) {
+            // TODO: nullptr request not allowed according to MPI standard
+            // possibly abort the MPI application here
+            // }
+            index_t idx = rc_.acquire();
 
-            // clear request in array
-            rc_.requests_[idx]       = *request; // TODO: copy necessary?
-            rc_.flags_[idx].done_    = false;
-            rc_.flags_[idx].reclaim_ = false;
+            rc_.flags_[idx].done_ = false; // TODO: think about required memory ordering
 
             // return slot index in old request
             std::atomic<index_t> *idx_ptr = reinterpret_cast<std::atomic<index_t> *>(request);
-            *idx_ptr                      = idx;
+            *idx_ptr                      = idx; // TODO: think about required memory ordering
 
             // new MPI_Request pointer
             return &rc_.requests_[idx];
         }
 
+        /**
+         * @brief Invalidates a request (from the application) to be able to test/wait on the request in the application
+         * thread before the offload thread has posted the related offload command (called by application thread)
+         *
+         * @param request
+         */
         void invalidate_request(MPI_Request *request)
         {
             std::atomic<index_t> *idx_ptr = reinterpret_cast<std::atomic<index_t> *>(request);
-            *idx_ptr                      = INVALID_INDEX;
+            *idx_ptr                      = INVALID_INDEX; // TODO: think about required memory ordering
         }
 
+        /**
+         * @brief Waits on a request (called by application thread)
+         *
+         * @param request
+         * @param status
+         */
         void wait(MPI_Request *request, MPI_Status *status)
         {
             index_t idx;
@@ -70,9 +87,18 @@ namespace mmcso
                 *status = rc_.statuses_[idx];
             }
 
-            rc_.flags_[idx].reclaim_ = true;
+            rc_.flags_[idx].done_ = false;
+            rc_.release(idx);
         }
 
+        /**
+         * @brief Tests completion of a request (called by application thread)
+         *
+         * @param request
+         * @param status
+         * @return true
+         * @return false
+         */
         bool test(MPI_Request *request, MPI_Status *status)
         {
             index_t idx = *(reinterpret_cast<std::atomic<index_t> *>(request));
@@ -88,148 +114,122 @@ namespace mmcso
             if (status != MPI_STATUS_IGNORE) {
                 *status = rc_.statuses_[idx];
             }
-
-            rc_.flags_[idx].reclaim_ = true;
             return true;
         }
 
     private:
+        // we align the request flags to the cache line size to avoid false
+        // sharing while spinning on the done flag
+        //
+        // TODO: this struct may may be merged with e.g. the MPI requests
+        // to use less memory and further improve performance
         struct alignas(CLSIZE) RequestFlags {
             std::atomic_bool done_{false};
             // char padding__[CLSIZE - sizeof(std::atomic_bool)];
-            std::atomic_bool reclaim_{false};
         };
 
         template <size_t Size>
         struct RequestPool {
-            RequestPool() { std::fill(requests_.begin(), requests_.end(), MPI_REQUEST_NULL); }
-
-            index_t next_slot_idx()
+            RequestPool()
             {
-                // wait until a slot is free
-                while (size_ == size_max_) {
+                // not required to initialize requests
+                // std::fill(requests_.begin(), requests_.end(), MPI_REQUEST_NULL);
+
+                // this initializes the free list for the request pool
+                for (index_t i = Size - 1; i != 0u; --i) {
+                    release(i);
+                }
+#if 0
+                for (index_t i = 0u; i != Size; ++i) {
+                    DEBUG("[pid=%d] i=%u next=%u\n", getpid(), i, nexts_[i]);
+                }
+                DEBUG("[pid=%d] head=%u\n", getpid(), head_.load());
+#endif
+            }
+
+            void release(index_t idx)
+            {
+                nexts_[idx] = head_;
+                while (!head_.compare_exchange_weak(
+                    nexts_[idx], idx, std::memory_order_release, std::memory_order_relaxed)) {
+                    /* spin */
+                }
+            }
+
+            index_t acquire()
+            {
+                index_t old_head = head_;
+
+                while (old_head != INVALID_INDEX &&
+                       !head_.compare_exchange_weak(
+                           old_head, nexts_[old_head], std::memory_order_acquire, std::memory_order_relaxed)) {
+                    /* spin */
+                }
+
+                if (old_head == INVALID_INDEX) {
+                    // TODO:
+                    // this means that all request slots are in use
+                    // this situation can lead to a deadlock situation
+                    // solution should be to increase the number of available
+                    // slots dynamically here
+                    DEBUG("[pid=%d] no more available slots!\n", (int)getpid());
                     test_requests();
-                    reclaim();
+                    acquire();
                 }
 
-                if (size_ != 0) {
-                    ++last_;
-                    last_ = last_ % size_max_;
-                }
+                used_.push_front(old_head);
 
-                ++size_;
-
-                return last_;
+                return old_head;
             }
 
             void test_request(MPI_Request *request)
             {
                 index_t idx = request - &requests_[0];
-                int     flag;
+
+                int flag;
                 PMPI_Test(request, &flag, &statuses_[idx]);
                 if (flag) {
+                    used_.remove(idx);
                     flags_[idx].done_ = true;
-                }
-            }
-
-            void test_and_set_flags(index_t first, index_t len)
-            {
-                int outcount;
-                PMPI_Testsome(len, &requests_[first], &outcount, &indices_[first], &statuses_[first]);
-
-                if (outcount == 0 || outcount == MPI_UNDEFINED) {
-                    return;
-                }
-
-                for (int i = 0; i < outcount; ++i) {
-                    flags_[indices_[i + first] + first].done_ = true;
                 }
             }
 
             void test_requests()
             {
-                /** TODO: benchmark and select one of the two solutions */
-                test_requests_array();
-            }
-
-            void test_requests_array()
-            {
-                if (size_ == 0) {
-                    return;
-                }
-
-                index_t imax = last_ < first_ ? size_max_ : last_ + 1;
-                test_and_set_flags(first_, imax - first_);
-                if (last_ < first_) {
-                    test_and_set_flags(0, last_ + 1);
-                }
-            }
-
-            void test_requests_single()
-            {
-                if (size_ == 0) {
-                    return;
-                }
-
-                int imax = last_ < first_ ? size_max_ : last_ + 1;
-                for (int i = first_; i < imax; ++i) {
-                    if (requests_[i] == MPI_REQUEST_NULL) {
+                // not using for_each since we need the iterator in for 'erase'
+                for (auto it = used_.begin(); it != used_.end(); ++it) {
+                    index_t idx = *it;
+                    if (requests_[idx] == MPI_REQUEST_NULL) {
                         continue;
                     }
                     int flag;
-                    PMPI_Test(&requests_[i], &flag, &statuses_[i]);
+                    PMPI_Test(&requests_[idx], &flag, &statuses_[idx]);
                     if (flag) {
-                        flags_[i].done_ = true;
-                    }
-                }
-
-                if (last_ < first_) {
-                    for (int i = 0; i <= last_; ++i) {
-                        if (requests_[i] == MPI_REQUEST_NULL) {
-                            continue;
-                        }
-                        int flag;
-                        PMPI_Test(&requests_[i], &flag, &statuses_[i]);
-                        if (flag) {
-                            flags_[i].done_ = true;
-                        }
+                        flags_[idx].done_ = true;
+                        it                = used_.erase(it);
                     }
                 }
             }
 
-            void reset(index_t idx)
-            {
-                // requests_[idx]       = MPI_REQUEST_NULL; // not necessary
-                flags_[idx].done_    = false;
-                flags_[idx].reclaim_ = false;
-            }
+            void reset(index_t idx) { flags_[idx].done_ = false; }
 
-            void reclaim()
-            {
-                if (size_ == 0) {
-                    return;
-                }
+            std::array<MPI_Request, Size>  requests_{};
+            std::array<MPI_Status, Size>   statuses_{}; // holds MPI_Statuses of requests
+            std::array<RequestFlags, Size> flags_{};
+            std::array<index_t, Size>      nexts_{}; // stores index of slot's next free slot
 
-                while (flags_[first_].reclaim_) {
-                    reset(first_);
-                    --size_;
-                    if (size_ > 0) {
-                        ++first_;
-                        first_ = first_ % size_max_;
-                    }
-                }
-            }
+            static constexpr index_t size_max_{Size}; // maximum number of outstanding MPI requests
 
-            index_t size_max_{Size};
             index_t size_{0u};  // current number of elements in use
             index_t last_{0u};  // index of next free element
             index_t first_{0u}; // index of first used element
 
-            std::array<MPI_Request, Size>  requests_{};
-            std::array<RequestFlags, Size> flags_{};
+            std::atomic<index_t> head_{INVALID_INDEX}; // head of (concurrent) free list
+            std::list<index_t>   used_{}; // list of slots currently in use (managed only by offloading thread)
 
-            std::array<int, Size>        indices_{};  // array required for calling MPI_Testsome/any/all
-            std::array<MPI_Status, Size> statuses_{}; // array required for calling MPI_Testsome/any/all
+            // std::array<int, Size>        indices_{};  // array required for calling MPI_Testsome/any/all
+
+            // std::atomic<size_t> num_open_requests_{0};
         };
 
         static constexpr index_t INVALID_INDEX = std::numeric_limits<index_t>::max();

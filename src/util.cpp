@@ -4,10 +4,11 @@
 #    define _GNU_SOURCE
 #endif /* _GNU_SOURCE */
 
+#include <climits>
 #include <cstring>
+
 #include <pthread.h>
 #include <sched.h>
-
 #include <unistd.h>
 
 namespace mmcso::util
@@ -39,13 +40,14 @@ namespace mmcso::util
             }
         }
 
-        char hostname[4096];
-        gethostname(hostname, 4096);
+        char hostname[HOST_NAME_MAX];
+        gethostname(hostname, HOST_NAME_MAX);
 
         int r, cpu;
         int nscan;
         int offset = 0;
         int nread;
+        // NOLINTNEXTLINE
         while ((nscan = sscanf(cpu_id_str + offset, "%d:%d%n[^,]", &r, &cpu, &nread)) == 2) {
             // std::cout << r << ":" << cpu << " nread: " << nread << '\n';
             offset += nread;

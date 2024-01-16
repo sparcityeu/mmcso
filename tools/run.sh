@@ -1,4 +1,5 @@
 # export LD_PRELOAD=/lib/x86_64-linux-gnu/libasan.so.6
+# export LD_PRELOAD=/lib/x86_64-linux-gnu/libtsan.so.6
 export LD_PRELOAD=${LD_PRELOAD}:build/src/libmmcso.so
 export MMCSO_THREAD_AFFINITY=0:7,1:15
 export MMCSO_DISPLAY_AFFINITY=TRUE

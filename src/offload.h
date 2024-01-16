@@ -86,10 +86,10 @@ namespace mmcso
         void enqueue(OffloadCommand *command) { q_.enqueue(command); }
 
     private:
-        std::thread     thread_;
-        CommandQueue   &q_;
-        RequestManager &rm_;
-        bool            running_{false};
+        std::thread      thread_;
+        CommandQueue    &q_;
+        RequestManager  &rm_;
+        std::atomic_bool running_{false};
     };
 
     template <class CommandQueue, class RequestManager, size_t NumThreads = 1>
@@ -98,6 +98,11 @@ namespace mmcso
         static_assert(NumThreads > 0);
 
     public:
+        /**
+         * @brief Posts an MPI command to the offload queue (called by application thread)
+         *
+         * @param command
+         */
         void post(OffloadCommand *command)
         {
             // the application thread must eventually invalidate its request because it has to wait until
