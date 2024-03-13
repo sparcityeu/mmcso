@@ -1,6 +1,6 @@
 @FUNCTION_SIGNATURE@
 {
-    oe.post(new OffloadCommand{[=](MPI_Request *request_) {
+    oe.post(new mmcso::OffloadCommand{[=](MPI_Request *request_) {
                                    return P@FUNCTION_NAME@(
                                        @FUNCTION_PARAMETER_WO_REQ@, request_);
                                },
