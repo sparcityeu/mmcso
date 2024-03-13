@@ -26,6 +26,10 @@ export LD_PRELOAD={PATH TO LIBMMCSO}/libmmc.so
 # Run MPI application
 ```
 
+See `tools/run.sh` for an example usage with OpenMPI with 2 MPI processes and 3 OpenMP threads per MPI process.
+
+The file `bench/mt_overlap` in the build folder contains a micro-benchmark that will be run using `run.sh`.
+
 ### Thread affinity
 
 It is recommended to pin the offloading thread to a core in the same NUMA domain as the threads of the multithreaded MPI process.
@@ -42,10 +46,6 @@ LIST=rank:cpu[,LIST]
 # Show thread affinity of offloading thread
 MMCSO_DISPLAY_AFFINITY={TRUE|FALSE}
 ```
-
-See `tools/run.sh` for an example usage with OpenMPI with 2 MPI processes and 3 OpenMP threads per MPI process.
-
-The file `bench/mt_overlap` in the build folder contains a micro-benchmark that will be run using `run.sh`.
 
 ## References
 
