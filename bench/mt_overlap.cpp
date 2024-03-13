@@ -1,3 +1,5 @@
+#include <vector>
+
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -40,9 +42,9 @@ static void do_work(int work)
 #else
 static void do_work(int work)
 {
-    struct timespec ts {
-        .tv_sec = 0, .tv_nsec = work
-    };
+    struct timespec ts{};
+    ts.tv_sec = 0; 
+    ts.tv_nsec = work;
     nanosleep(&ts, NULL);
 }
 #endif
@@ -74,8 +76,8 @@ int main(int argc, char *argv[])
     MPI_Comm_set_info(MPI_COMM_WORLD, info);
     MPI_Info_free(&info);
 
-    measurement m[nthreads];
-    MPI_Comm    communicators[nthreads];
+    std::vector<measurement> m(nthreads);
+    std::vector<MPI_Comm>    communicators(nthreads);
 
     for (int i = 0; i < nthreads; ++i) {
         if (MPI_Comm_dup(MPI_COMM_WORLD, &communicators[i]) != MPI_SUCCESS) {
@@ -118,10 +120,7 @@ int main(int argc, char *argv[])
 #pragma omp parallel
     {
         int thread_id = omp_get_thread_num();
-
-        // int *sendbuf = (int *)aligned_alloc(PAGESIZE, msg_size * sizeof(int));
-        // int *recvbuf = (int *)aligned_alloc(PAGESIZE, msg_size * sizeof(int));
-
+        
         size_t num_pages = ((msg_size * sizeof(int) + PAGESIZE - 1) / PAGESIZE) * PAGESIZE;
         assert(num_pages % PAGESIZE == 0);
         int *sendbuf = (int *)aligned_alloc(PAGESIZE, num_pages);
