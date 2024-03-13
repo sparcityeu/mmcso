@@ -54,7 +54,7 @@ namespace mmcso
         }
 
         /**
-         * @brief Invalidates a request (from the application) to be able to test/wait on the request in the application
+         * @brief Invalidates a request (inside application) to be able to test/wait on the request in the application
          * thread before the offload thread has posted the related offload command (called by application thread)
          *
          * @param request
@@ -121,7 +121,7 @@ namespace mmcso
         // we align the request flags to the cache line size to avoid false
         // sharing while spinning on the done flag
         //
-        // TODO: this struct may may be merged with e.g. the MPI requests
+        // TODO: this struct may may be merged with e.g. the MPI request or status
         // to use less memory and further improve performance
         struct alignas(CLSIZE) RequestFlags {
             std::atomic_bool done_{false};
@@ -139,12 +139,6 @@ namespace mmcso
                 for (index_t i = Size - 1; i != 0u; --i) {
                     release(i);
                 }
-#if 0
-                for (index_t i = 0u; i != Size; ++i) {
-                    DEBUG("[pid=%d] i=%u next=%u\n", getpid(), i, nexts_[i]);
-                }
-                DEBUG("[pid=%d] head=%u\n", getpid(), head_.load());
-#endif
             }
 
             void release(index_t idx)
@@ -170,11 +164,11 @@ namespace mmcso
                     // TODO:
                     // this means that all request slots are in use
                     // this situation can lead to a deadlock situation
-                    // solution should be to increase the number of available
+                    // solution can be to increase the number of available
                     // slots dynamically here
                     DEBUG("[pid=%d] no more available slots!\n", (int)getpid());
-                    test_requests();
-                    acquire();
+                    // test_requests();
+                    // acquire();
                 }
 
                 used_.push_front(old_head);
@@ -211,7 +205,7 @@ namespace mmcso
                 }
             }
 
-            void reset(index_t idx) { flags_[idx].done_ = false; }
+            void reset(index_t idx) { flags_[idx].done_.store(false); }
 
             std::array<MPI_Request, Size>  requests_{};
             std::array<MPI_Status, Size>   statuses_{}; // holds MPI_Statuses of requests
@@ -226,10 +220,6 @@ namespace mmcso
 
             std::atomic<index_t> head_{INVALID_INDEX}; // head of (concurrent) free list
             std::list<index_t>   used_{}; // list of slots currently in use (managed only by offloading thread)
-
-            // std::array<int, Size>        indices_{};  // array required for calling MPI_Testsome/any/all
-
-            // std::atomic<size_t> num_open_requests_{0};
         };
 
         static constexpr index_t INVALID_INDEX = std::numeric_limits<index_t>::max();

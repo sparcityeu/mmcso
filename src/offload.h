@@ -2,6 +2,7 @@
 #define MMCSO_OFFLOAD_H_INCLUDED
 
 #include <functional>
+#include <future>
 #include <thread>
 
 #include <mpi.h>
@@ -38,7 +39,9 @@ namespace mmcso
                 if (command) {
                     MPI_Request *request = rm_.post(command->request_);
 
-                    int ret = (*command)(request);
+                    // make actual MPI call
+                    [[maybe_unused]] int ret = (*command)(request);
+
                     if (command->null_request_) {
                         // set request to MPI_REQUEST_NULL
                         // this will set the flag to true after the
@@ -96,6 +99,9 @@ namespace mmcso
     class OffloadEngine
     {
         static_assert(NumThreads > 0);
+
+        // for now, we support only one offloading thread per MPI process
+        static_assert(NumThreads == 1);
 
     public:
         /**
